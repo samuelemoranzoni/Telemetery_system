@@ -9,34 +9,37 @@ class DisplayManager {
     DisplayManager() : u8g2(U8G2_R0, 9, 8, 6, 7, 5) {}
     void init() { u8g2.begin(); u8g2.enableUTF8Print(); u8g2.setContrast(255); }
 
-    void drawTelemetry(int bpm, float slope, float lean, float vib, bool crash) {
+    void drawTelemetry(int bpm, float gf, double speed, int sats, bool wifiOk, bool bleOk) {
       u8g2.clearBuffer();
 
-      if (crash) {
-        // SCHERMATA DI EMERGENZA
-        u8g2.setFont(u8g2_font_ncenB18_tr);
-        u8g2.drawStr(10, 60, "CRASH!");
-        u8g2.drawStr(10, 90, "DETECTED");
-      } else {
-        // DASHBOARD NORMALE
-        u8g2.setFont(u8g2_font_helvB08_tr);
-        u8g2.drawStr(2, 10, "SMART BIKE");
-        u8g2.drawHLine(0, 12, 128);
+      // Header
+      u8g2.setFont(u8g2_font_helvB08_tr);
+      u8g2.drawStr(2, 10, "SMART BIKE");
+      u8g2.drawHLine(0, 12, 128);
 
-        // BPM
-        u8g2.setFont(u8g2_font_ncenB18_tr);
-        u8g2.setCursor(5, 45); (bpm>0)? u8g2.print(bpm) : u8g2.print("--");
-        u8g2.setFont(u8g2_font_helvB08_tr); u8g2.print(" bpm");
+      // Icone
+      if(wifiOk) u8g2.drawStr(90, 10, "W");
+      if(bleOk)  u8g2.drawStr(105, 10, "B");
 
-        // PIEGA (LEAN)
-        u8g2.setCursor(5, 70); u8g2.print("Lean: "); u8g2.print(lean, 0); u8g2.print(" deg");
+      // VELOCITA' (GPS) - Al centro grande
+      u8g2.setFont(u8g2_font_ncenB18_tr);
+      u8g2.setCursor(5, 50);
+      u8g2.print(speed, 1);
+      u8g2.setFont(u8g2_font_helvB08_tr); u8g2.print(" km/h");
 
-        // VIBRAZIONE
-        u8g2.setCursor(5, 90); u8g2.print("Vib: "); u8g2.print(vib, 0);
+      // BATTITO
+      u8g2.setCursor(5, 75); 
+      u8g2.print("HR: "); (bpm>0)? u8g2.print(bpm) : u8g2.print("--");
 
-        // SLOPE
-        u8g2.setCursor(5, 110); u8g2.print("Slope: "); u8g2.print(slope, 0); u8g2.print("%");
-      }
+      // G-FORCE
+      u8g2.setCursor(5, 90); 
+      u8g2.print("G: "); u8g2.print(gf, 2);
+
+      // SATELLITI
+      u8g2.setCursor(5, 115);
+      u8g2.print("Sats: "); u8g2.print(sats);
+      if(sats < 4) u8g2.print(" (No Fix)");
+
       u8g2.drawFrame(0, 0, 128, 128);
       u8g2.sendBuffer();
     }
