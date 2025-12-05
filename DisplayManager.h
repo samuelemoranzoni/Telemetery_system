@@ -17,25 +17,25 @@ class DisplayManager {
       u8g2.drawStr(2, 10, "SMART BIKE");
       u8g2.drawHLine(0, 12, 128);
 
-      // Icone
+      // Icon
       if(wifiOk) u8g2.drawStr(90, 10, "W");
       if(bleOk)  u8g2.drawStr(105, 10, "B");
 
-      // VELOCITA' (GPS) - Al centro grande
+      // speed displayed
       u8g2.setFont(u8g2_font_ncenB18_tr);
       u8g2.setCursor(5, 50);
       u8g2.print(speed, 1);
       u8g2.setFont(u8g2_font_helvB08_tr); u8g2.print(" km/h");
 
-      // BATTITO
+      // Heart rate (bpm) displayed
       u8g2.setCursor(5, 75); 
       u8g2.print("HR: "); (bpm>0)? u8g2.print(bpm) : u8g2.print("--");
 
-      // G-FORCE
+      // g-force displayed
       u8g2.setCursor(5, 90); 
       u8g2.print("G: "); u8g2.print(gf, 2);
 
-      // SATELLITI
+      // number of satellites displayed
       u8g2.setCursor(5, 115);
       u8g2.print("Sats: "); u8g2.print(sats);
       if(sats < 4) u8g2.print(" (No Fix)");

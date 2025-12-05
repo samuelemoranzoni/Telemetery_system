@@ -8,8 +8,8 @@ class NetworkManager {
   private:
     char ssid[50];
     char pass[50];
-    const char* broker = "broker.hivemq.com"; 
-    int port = 1883;
+    const char* broker = "broker.hivemq.com"; // The Cloud Server
+    int port = 1883; // Standard MQTT port
     String baseTopic = "portenta/bike/"; 
     WiFiClient wifiClient;
     MqttClient mqttClient;
@@ -21,23 +21,44 @@ class NetworkManager {
     }
 
     void init() {
+      Serial.print("Connecting WiFi: "); Serial.println(ssid);
       WiFi.begin(ssid, pass);
-      int t=0; while(WiFi.status()!=WL_CONNECTED && t<20){ delay(500); Serial.print("."); t++; }
-      if(WiFi.status()==WL_CONNECTED) connectMqtt();
+      
+      // Try connecting for 10 seconds (20 * 500ms)
+      int t = 0;
+      while(WiFi.status()!=WL_CONNECTED && t<20) { 
+        delay(500); 
+        Serial.print("."); 
+        t++; 
+      }
+      
+      if(WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi OK!");
+        connectMqtt(); // Only connect to Cloud if WiFi works
+      } else { 
+        Serial.println("\nWiFi Failed."); 
+      }
     }
 
-    void connectMqtt() { mqttClient.connect(broker, port); }
+    void connectMqtt() {
+      // Connect to HiveMQ broker
+      if (!mqttClient.connect(broker, port)) Serial.println("MQTT Error");
+      else Serial.println("MQTT Connected!");
+    }
+
+    // Keep the connection alive
     void update() { if(WiFi.status()==WL_CONNECTED) mqttClient.poll(); }
 
-    // FUNZIONE DI INVIO COMPLETA
+    // THE MAIN SENDING FUNCTION
+    // Takes ALL metrics and sends them to the cloud
     void sendTelemetry(int bpm, float gf, float slope, float lean, float vib, bool crash, 
                        float temp, double lat, double lon, double alt, double spd, double odo, double avg) {
       
       if (WiFi.status() == WL_CONNECTED) {
+        // Reconnect if connection dropped
         if (!mqttClient.connected()) connectMqtt();
 
-        // 1. Invio metriche veloci singole (per i gauge dell'App)
-        
+        // 1. Send SINGLE TOPICS (For Real-time Dashboard Gauges)
         mqttClient.beginMessage(baseTopic + "bpm"); mqttClient.print(bpm); mqttClient.endMessage();
         mqttClient.beginMessage(baseTopic + "gf");  mqttClient.print(gf);  mqttClient.endMessage();
         mqttClient.beginMessage(baseTopic + "slp"); mqttClient.print(slope); mqttClient.endMessage();
@@ -52,13 +73,9 @@ class NetworkManager {
         mqttClient.beginMessage(baseTopic + "odo"); mqttClient.print(odo); mqttClient.endMessage();
         mqttClient.beginMessage(baseTopic + "avg"); mqttClient.print(avg); mqttClient.endMessage();
 
-
-        
-        
-        
-        // 2. Invio JSON COMPLETO (Database Log)
+        // 2. Send FULL JSON (For Data Logging / Database)
+        // We build a single text string with all data
         String json = "{";
-        // Fisiologia & Fisica
         json += "\"bpm\":" + String(bpm) + ",";
         json += "\"gf\":" + String(gf) + ",";
         json += "\"slp\":" + String(slope) + ",";
@@ -66,7 +83,6 @@ class NetworkManager {
         json += "\"vib\":" + String(vib) + ",";
         json += "\"crash\":" + String(crash) + ",";
         json += "\"tmp\":" + String(temp) + ",";
-        // Navigazione GPS
         json += "\"lat\":" + String(lat, 6) + ",";
         json += "\"lon\":" + String(lon, 6) + ",";
         json += "\"alt\":" + String(alt) + ",";
@@ -75,6 +91,7 @@ class NetworkManager {
         json += "\"avg\":" + String(avg);
         json += "}";
 
+        // Send JSON on separate topic
         mqttClient.beginMessage(baseTopic + "json");
         mqttClient.print(json);
         mqttClient.endMessage();

@@ -6,12 +6,12 @@
 #include "BleManager.h"
 #include "ImuManager.h"
 #include "DisplayManager.h"
-#include "GpsManager.h"     // <--- Nuovo amico
+#include "GpsManager.h"     
 #include "NetworkManager.h"
 
-// --- CREDENZIALI ---
-const char* WIFI_SSID = "Esu_Mob"; // Il tuo hotspot senza spazi
-const char* WIFI_PASS = "09141414";
+// 
+const char* WIFI_SSID = "Adrian"; // hotspot without spaces
+const char* WIFI_PASS = "12345678";
 
 // --- OGGETTI ---
 BleManager ble;
@@ -29,26 +29,27 @@ void setup() {
 
   display.init();
   imu.init();
-  gps.init();  // Avvia la seriale GPS
-  net.init();  // Connette WiFi
-  ble.init();  // Cerca Polar
+  gps.init();  // Start the serial GPS
+  net.init();  // Connect to WiFi
+  ble.init();  // Look for Polar
+  Serial.println("PUTA");
 }
 
 void loop() {
-  // 1. Aggiornamento continuo dei sensori
+  // 1. Update of sensors
   gps.update(); // FONDAMENTALE chiamarlo spesso per leggere la seriale
   imu.update();
   ble.update();
   net.update();
 
-  // 2. Logica di Invio (1 Hz - Ogni secondo)
+  // 2. Logic (1 Hz - every second)
   if (millis() - lastSend > 1000) {
     lastSend = millis();
     
-    // Raccogli TUTTI i dati
+    // bpm
     int bpm = ble.getBpm();
     
-    // Dati IMU
+    // Data IMU
     float gf = imu.getGForce();
     float sl = imu.getSlope();
     float ln = imu.getLean();
@@ -56,7 +57,7 @@ void loop() {
     bool cr = imu.isCrash();
     float tm = imu.getTemp();
 
-    // Dati GPS
+    // Data GPS
     double lat = gps.getLat();
     double lon = gps.getLon();
     double alt = gps.getAlt();
@@ -65,10 +66,10 @@ void loop() {
     double avg = gps.getAvgSpeed();
     int sats = gps.getSats();
 
-    // Aggiorna Display Fisico
+    // Update Display 
     display.drawTelemetry(bpm, gf, spd, sats, (WiFi.status() == WL_CONNECTED), ble.isConnected());
 
-    // Manda al Cloud
+    // Send to cloud ( to broker and after subscriber such us Mqttpanel can visualize data)
     net.sendTelemetry(bpm, gf, sl, ln, vb, cr, tm, lat, lon, alt, spd, odo, avg);
   }
 }
