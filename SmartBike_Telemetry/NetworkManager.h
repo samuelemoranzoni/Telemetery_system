@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <ArduinoMqttClient.h>
 
+//DADADA
 class NetworkManager {
   private:
     char ssid[50];
