@@ -16,8 +16,8 @@ using namespace rtos;
 using namespace std::chrono;
 
 // ---- WIFI CREDENTIALS ----
-const char* WIFI_SSID = "Adrian";
-const char* WIFI_PASS = "puta1234";
+const char* WIFI_SSID = "Esu_Mob";
+const char* WIFI_PASS = "09141414";
 
 // ---- GLOBAL OBJECTS ----
 BLEManager     ble;
