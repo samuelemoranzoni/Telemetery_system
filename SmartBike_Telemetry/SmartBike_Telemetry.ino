@@ -1,8 +1,3 @@
-/*
- * SMART BIKE TELEMETRY - HARDWARE DIAGNOSTIC MODE
- * Status: DEBUGGING "SILENT FREEZE"
- */
-
 #include "mbed.h"
 #include "BleManager.h"
 #include "ImuManager.h"
@@ -17,7 +12,7 @@ using namespace std::chrono;
 
 // ---- WIFI CREDENTIALS ----
 const char* WIFI_SSID = "Esu_Mob";
-const char* WIFI_PASS = "09141414";
+const char* WIFI_PASS = "091414145";
 
 // ---- GLOBAL OBJECTS ----
 BLEManager     ble;
@@ -27,186 +22,184 @@ DisplayManager display;
 NetworkManager net(WIFI_SSID, WIFI_PASS);
 
 // ---- THREADS ----
-// Reduced stack slightly to ensure we fit in RAM, but kept high enough for stability
-Thread bleThread(osPriorityHigh, 4096); 
+Thread bleThread(osPriorityNormal, 4096); 
 Thread gpsThread(osPriorityNormal, 2048); 
 Thread imuThread(osPriorityNormal, 2048); 
-Thread netThread(osPriorityNormal, 6000); 
+Thread netThread(osPriorityNormal, 8192); 
 Thread displayThread(osPriorityLow, 4096);
 
-// ---- GLOBAL FLAGS ----
-volatile bool systemReady = false; // Prevents threads from reading sensors before init
+volatile bool systemReady = false;
+volatile bool bleReady = false;
 
 // ----------------- TASK FUNCTIONS -----------------
 
 void bleTask() {
-    while(!systemReady) ThisThread::sleep_for(milliseconds(100)); // Wait for setup
-    while (true) {
+    ble.begin();
+    bleReady = true;
+
+    while(true) {
         ble.update();
-        ThisThread::sleep_for(milliseconds(20));
+        ThisThread::sleep_for(milliseconds(50));
     }
 }
 
 void gpsTask() {
-    while(!systemReady) ThisThread::sleep_for(milliseconds(100));
-    while (true) {
+    while(!systemReady || !bleReady) ThisThread::sleep_for(milliseconds(100));
+    while(true) {
         gps.update();
-        ThisThread::sleep_for(milliseconds(10));
+        ThisThread::sleep_for(milliseconds(50));
     }
 }
 
 void imuTask() {
-    while(!systemReady) ThisThread::sleep_for(milliseconds(100));
-    while (true) {
+    while(!systemReady || !bleReady) ThisThread::sleep_for(milliseconds(100));
+    while(true) {
         imu.update();
         ThisThread::sleep_for(milliseconds(20));
     }
 }
 
 void netTask() {
-    // 1. Wait for system to fully boot
-    while(!systemReady) ThisThread::sleep_for(milliseconds(100));
-    
-    while (true) {
-        // 2. Check Connection Status
-        if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("[Net] WiFi Disconnected/Failed. Retrying...");
-            
-            // This function blocks for 10 seconds trying to connect.
-            // Since we are in a thread, this is SAFE and won't freeze the display!
-            net.init(); 
+    while(!systemReady || !bleReady) ThisThread::sleep_for(milliseconds(100));
 
-            // If it still failed, wait 5 seconds before trying again
-            // This prevents spamming the router if it's down.
-            if (WiFi.status() != WL_CONNECTED) {
-                Serial.println("[Net] Still no WiFi. Waiting 5s...");
-                ThisThread::sleep_for(milliseconds(5000));
-                continue; // Jump back to the start of the loop
-            }
+    double lastSpeed = 0.0;
+    double lastAlt   = 0.0;
+    unsigned long lastTime = millis();
+
+    while(true) {
+        if (ble.isReady() && WiFi.status() != WL_CONNECTED) net.init();
+
+        // --- READ SENSORS ---
+        int bpm      = ble.getHeartRate();
+        float gf     = imu.getGForce();
+        float slope  = imu.getSlope();
+        float lean   = imu.getLean();
+        float vib    = imu.getVibration();
+        bool crash   = imu.isCrash();
+        float temp   = imu.getTemp();
+        double lat   = gps.getLat();
+        double lon   = gps.getLon();
+        double alt   = gps.getAlt();
+        double spd   = gps.getSpeed();          // km/h
+        double odo   = gps.getOdometer();
+        double avgSpd= gps.getAvgSpeed();
+        int sats     = gps.getSats();
+        bool wifiOk  = (WiFi.status() == WL_CONNECTED);
+        bool bleOk   = ble.isDeviceConnected();
+
+        // --- NEW CALCULATIONS ---
+        unsigned long now = millis();
+        double dt = (now - lastTime) / 1000.0; // seconds
+        lastTime = now;
+
+        double speed_mps = spd / 3.6;
+        double lastSpeed_mps = lastSpeed / 3.6;
+
+        // Acceleration
+        double acceleration = (speed_mps - lastSpeed_mps) / dt; // m/s²
+        lastSpeed = spd;
+
+        // Climb angle from GPS altitude
+        double distance = gps.distanceBetween(lat, lon, gps.lastLat, gps.lastLon);
+        double altDiff = alt - lastAlt;
+        double climbAngle = 0.0;
+        if(distance > 0.1) climbAngle = atan2(altDiff, distance) * 57.29;
+        lastAlt = alt;
+
+        // Lateral G-force in turns
+        float lateralG = gf * sin(lean * 3.14159 / 180.0);
+
+        // Athlete effort indicator
+        float effort = bpm / (spd + 0.1);
+
+        // --- TELEMETRY OUTPUT ---
+        Serial.print("SPD: "); Serial.print(spd);
+        Serial.print(", ACC: "); Serial.print(acceleration, 2);
+        Serial.print(", CLIMB: "); Serial.print(climbAngle, 2);
+        Serial.print(", LAT_G: "); Serial.print(lateralG, 2);
+        Serial.print(", EFFORT: "); Serial.println(effort, 2);
+
+        // Send telemetry
+        if(wifiOk) {
+            net.sendTelemetry(bpm, gf, slope, lean, vib, crash, temp,
+                              lat, lon, alt, spd, odo, avgSpd,
+                              acceleration, climbAngle, lateralG, effort);
         }
 
-        // 3. If we are here, WiFi is Connected!
-        net.update(); // Keep MQTT alive
-        
-        static unsigned long lastSendTime = 0;
-        if (millis() - lastSendTime > 1000) {
-            // Gather Data
-            int bpm     = ble.getHeartRate(); 
-            float gf    = imu.getGForce();
-            float slope = imu.getSlope();
-            float lean  = imu.getLean();
-            float vib   = imu.getVibration();
-            bool crash  = imu.isCrash();
-            float temp  = imu.getTemp();
-            double lat  = gps.getLat();
-            double lon  = gps.getLon();
-            double alt  = gps.getAlt();
-            double spd  = gps.getSpeed();
-            double odo  = gps.getOdometer();
-            double avg  = gps.getAvgSpeed();
-
-            // Send to Cloud
-            net.sendTelemetry(bpm, gf, slope, lean, vib, crash, temp, lat, lon, alt, spd, odo, avg);
-            
-            lastSendTime = millis();
-        }
-        
-        ThisThread::sleep_for(milliseconds(50));
+        ThisThread::sleep_for(milliseconds(1000));
     }
 }
 
 void displayTask() {
-    while(!systemReady) ThisThread::sleep_for(milliseconds(100));
+    while(!systemReady || !bleReady) ThisThread::sleep_for(milliseconds(100));
+    while(true) {
+        // Read sensors
+        int bpm      = ble.getHeartRate();
+        double spd   = gps.getSpeed();
+        float gf     = imu.getGForce();
+        float lean   = imu.getLean();
+        bool crash   = imu.isCrash();
+        bool wifiOk  = (WiFi.status() == WL_CONNECTED);
+        bool bleOk   = ble.isDeviceConnected();
 
-    while (true) {
-        int bpm    = ble.getHeartRate();      
-        bool bleOK = ble.isDeviceConnected(); 
-        float gf   = imu.getGForce();
-        double sp  = gps.getSpeed();
-        int sats   = gps.getSats();
-        
-        // SAFE WIFI CHECK: Only check if network manager has likely started
-        // Directly accessing WiFi.status() before WiFi.begin() can crash Mbed
-        bool wifiOK = false;
-        if (millis() > 5000) { // Assume WiFi init starts after 5 seconds
-             wifiOK = (WiFi.status() == WL_CONNECTED);
-        }
+        static double lastSpeed = 0.0;
+        static double lastAlt = 0.0;
+        static unsigned long lastTime = millis();
+        unsigned long now = millis();
+        double dt = (now - lastTime) / 1000.0;
+        lastTime = now;
 
-        display.drawTelemetry(bpm, gf, sp, sats, wifiOK, bleOK);
-        ThisThread::sleep_for(milliseconds(100)); 
+        double speed_mps = spd / 3.6;
+        double lastSpeed_mps = lastSpeed / 3.6;
+        double acceleration = (speed_mps - lastSpeed_mps) / dt;
+        lastSpeed = spd;
+
+        double climbAngle = 0.0;
+        double distance = gps.distanceBetween(gps.getLat(), gps.getLon(), gps.lastLat, gps.lastLon);
+        double altDiff = gps.getAlt() - lastAlt;
+        if(distance > 0.1) climbAngle = atan2(altDiff, distance) * 57.29;
+        lastAlt = gps.getAlt();
+
+        float lateralG = gf * sin(lean * 3.14159 / 180.0);
+
+        display.drawTelemetry(bpm, spd, acceleration, lateralG, climbAngle, wifiOk, bleOk, crash);
+
+        ThisThread::sleep_for(milliseconds(500));
     }
-}
-
-// ----------------------- HELPER: LED STATUS -----------------------
-void setStatusColor(bool r, bool g, bool b) {
-  digitalWrite(LEDR, r ? LOW : HIGH); // LOW is ON for Portenta
-  digitalWrite(LEDG, g ? LOW : HIGH);
-  digitalWrite(LEDB, b ? LOW : HIGH);
 }
 
 // ----------------------- SETUP -----------------------
 
 void setup() {
-    // 1. HARDWARE PROOF OF LIFE (RED LED)
     pinMode(LEDR, OUTPUT);
     pinMode(LEDG, OUTPUT);
     pinMode(LEDB, OUTPUT);
-    setStatusColor(true, false, false); // RED = Booting
-    
+    digitalWrite(LEDR, LOW);
+
     Serial.begin(115200);
-    
-    // 2. FORCE WAIT FOR SERIAL (Max 10 seconds)
-    // This ensures you don't miss the start messages
-    long timeout = millis() + 10000;
-    while (!Serial && millis() < timeout) {
-        setStatusColor(true, false, true); // PURPLE = Waiting for USB
-        delay(100);
-    }
+    unsigned long start = millis();
+    while (!Serial && millis() - start < 5000);
 
-    Serial.println("\n\n--- DIAGNOSTIC BOOT START ---");
-    setStatusColor(true, true, false); // ORANGE = Initializing Sensors
+    Serial.println("\n--- SMART BIKE STARTUP ---");
 
-    // 3. INIT HARDWARE (Staggered to prevent power spike)
-    Serial.print("[1/5] Display... ");
     display.init();
-    Serial.println("OK");
-    delay(200);
-
-    Serial.print("[2/5] IMU... ");
     imu.init();
-    Serial.println("OK");
-    delay(200);
-
-    Serial.print("[3/5] GPS... ");
     gps.init();
-    Serial.println("OK");
-    delay(200);
-    
-    Serial.print("[4/5] BLE... ");
-    // If it hangs here, the BLE module is failing. 
-    // Check BleManager.h -> it has a while(1) loop on failure!
-    ble.begin(); 
-    Serial.println("OK");
-    delay(200);
 
-    Serial.print("[5/5] Starting Threads... ");
+    // Start threads
     bleThread.start(bleTask);
     gpsThread.start(gpsTask);
     imuThread.start(imuTask);
     netThread.start(netTask);
     displayThread.start(displayTask);
-    Serial.println("OK");
 
-    // 4. HANDOFF
     systemReady = true;
-    Serial.println("--- SYSTEM RUNNING (GREEN LED) ---");
-    setStatusColor(false, true, false); // GREEN = Success
+
+    digitalWrite(LEDR, HIGH);
+    digitalWrite(LEDG, LOW);
+    Serial.println("--- ALL SYSTEMS ACTIVE ---");
 }
 
-// ----------------------- LOOP ------------------------
 void loop() {
-    // Blink Green LED softly to show the Main Thread is alive
-    digitalWrite(LEDG, LOW); 
-    delay(500);
-
+    delay(1000);
 }

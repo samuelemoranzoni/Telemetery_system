@@ -1,101 +1,120 @@
+#ifndef BLE_MANAGER_H
+#define BLE_MANAGER_H
+
 #include <ArduinoBLE.h>
 
 class BLEManager {
 private:
     BLEDevice _peripheral;
     BLECharacteristic _hrChar;
+
     int _currentHeartRate = 0;
-    bool _isConnected = false;
+
+    bool connected = false;
+    bool scanning  = false;
+
+    unsigned long scanStart = 0;
+    const unsigned long SCAN_TIMEOUT = 8000;   // 8 seconds
+    const unsigned long SCAN_PAUSE   = 2000;   // pause before rescan
+
+    unsigned long lastScanStop = 0;
 
 public:
-    // Initialize BLE
     void begin() {
         if (!BLE.begin()) {
-            Serial.println("Starting BLE failed!");
+            Serial.println("BLE init failed!");
             while (1);
         }
-        Serial.println("BLE Manager started. Scanning...");
-        BLE.scan();
+
+        Serial.println("BLE started");
+        startScan();
     }
 
-    // This checks for connections and reads data
+    void startScan() {
+        Serial.println("BLE scanning...");
+        BLE.scan();
+        scanning = true;
+        scanStart = millis();
+    }
+
+    void stopScan() {
+        BLE.stopScan();
+        scanning = false;
+        lastScanStop = millis();
+    }
+
     void update() {
-        // 1. Keep BLE radio active
         BLE.poll();
 
-        // CASE A: We are NOT connected. Look for a device.
-        if (!_isConnected) {
-            BLEDevice foundDevice = BLE.available();
+        // -------------------------
+        // SCANNING STATE
+        // -------------------------
+        if (!connected && scanning) {
+            BLEDevice dev = BLE.available();
 
-            if (foundDevice) {
-                if (foundDevice.localName().indexOf("Polar") >= 0) {
+            if (dev && dev.localName().indexOf("Polar") >= 0) {
+                Serial.println("Found Polar! Connecting...");
+                stopScan();
 
-                    BLE.stopScan();
-                    Serial.println("Found Polar! Connecting...");
-
-                    if (foundDevice.connect()) {
-                        Serial.println("Connected!");
-                        _peripheral = foundDevice; // Save the device
-
-                        // Discover attributes
-                        if (_peripheral.discoverAttributes()) {
-                            _hrChar = _peripheral.characteristic("2a37");
-
-                            if (_hrChar && _hrChar.canSubscribe()) {
-                                _hrChar.subscribe();
-                                _isConnected = true; // Mark as connected
-                            }
-                            else {
-                                Serial.println("Characteristic error.");
-                                _peripheral.disconnect();
-                                BLE.scan();
-                            }
-                        }
-                        else {
-                            Serial.println("Attribute discovery failed.");
-                            _peripheral.disconnect();
-                            BLE.scan();
-                        }
-                    }
-                    else {
-                        Serial.println("Connection failed. Scanning...");
-                        BLE.scan();
+                if (dev.connect() && dev.discoverAttributes()) {
+                    _hrChar = dev.characteristic("2a37");
+                    if (_hrChar && _hrChar.canSubscribe()) {
+                        _hrChar.subscribe();
+                        _peripheral = dev;
+                        connected = true;
+                        Serial.println("BLE connected");
+                        return;
                     }
                 }
-            }
-        }
 
-        // CASE B: We ARE connected. Read the data.
-        else {
-            // Check if device is still actually connected
-            if (!_peripheral.connected()) {
-                Serial.println("Device disconnected! Scanning again...");
-                _isConnected = false;
-                _currentHeartRate = 0;
-                BLE.scan();
+                // Failed connection → restart scan
+                startScan();
                 return;
             }
 
-            // Read the value if it updated
+            // Scan timeout → pause → rescan
+            if (millis() - scanStart > SCAN_TIMEOUT) {
+                Serial.println("BLE scan timeout");
+                stopScan();
+            }
+            return;
+        }
+
+        // -------------------------
+        // RESCAN AFTER PAUSE
+        // -------------------------
+        if (!connected && !scanning) {
+            if (millis() - lastScanStop > SCAN_PAUSE) {
+                startScan();
+            }
+            return;
+        }
+
+        // -------------------------
+        // CONNECTED STATE
+        // -------------------------
+        if (connected) {
+            if (!_peripheral.connected()) {
+                Serial.println("BLE disconnected");
+                connected = false;
+                _currentHeartRate = 0;
+                stopScan();
+                return;
+            }
+
             if (_hrChar.valueUpdated()) {
-                const uint8_t* bytes = _hrChar.value();
-
-                // Your parsing logic
-                _currentHeartRate = (bytes[0] & 1) ? (bytes[1] | (bytes[2] << 8)) : bytes[1];
-
-                // Debug print inside the manager
-                Serial.print("BPM: ");
-                Serial.println(_currentHeartRate);
+                const uint8_t* b = _hrChar.value();
+                _currentHeartRate =
+                    (b[0] & 1) ? (b[1] | (b[2] << 8)) : b[1];
             }
         }
     }
 
-    // Helper to get the value in your main loop if you need it later
-    int getHeartRate() {
-        return _currentHeartRate;
-    }
+    int getHeartRate() { return _currentHeartRate; }
+    bool isDeviceConnected() { return connected; }
 
-    bool isDeviceConnected() {
-        return _isConnected;
-    }
+    // WiFi can safely start if BLE is either connected or idle
+    bool isReady() { return connected || !scanning; }
 };
+
+#endif

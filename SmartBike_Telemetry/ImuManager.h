@@ -6,69 +6,107 @@
 #include <Wire.h>
 
 class ImuManager {
-  private:
-    Adafruit_MPU6050 mpu;   // The sensor object
-    float gForce = 0.0;     // Total force (gravity + movement)
-    float slope = 0.0;      // Uphill/Downhill angle
-    float leanAngle = 0.0;  // Left/Right tilt in turns
-    float vibration = 0.0;  // How much the road shakes
-    bool crashDetected = false; // Did we crash?
-    float tempC = 0.0;      // Ambient temperature
+private:
+    Adafruit_MPU6050 mpu;
 
-  public:
-    // Setup function: runs once at startup
+    // Core metrics
+    float gForce = 1.0;         // Total G magnitude
+    float slope = 0.0;          // Pitch (up/down) in degrees
+    float leanAngle = 0.0;      // Roll (left/right) in degrees
+    float lateralG = 0.0;       // Turn G-force
+    float vibration = 0.0;      // Road vibration
+    bool crashDetected = false;
+    float tempC = 0.0;
+
+public:
     void init() {
-      if (!mpu.begin()) { 
-        Serial.println("IMU Error"); // Error if sensor is disconnected
-        return; 
-      }
-      // Set sensor range to 8G (so it doesn't max out on bumps)
-      mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-      // Filter out small vibrations (21Hz bandwidth)
-      mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+        if (!mpu.begin()) {
+            Serial.println("IMU Error");
+            return;
+        }
+
+        mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+        mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+
+        Serial.println("IMU OK");
     }
 
-    // Main logic: runs constantly in the loop
     void update() {
-      sensors_event_t a, g, temp;
-      mpu.getEvent(&a, &g, &temp); // Read new data from hardware
+        sensors_event_t a, g, temp;
+        mpu.getEvent(&a, &g, &temp);
 
-      // 1. CALCULATE G-FORCE (Total Magnitude)
-      // We use Pythagoras theorem in 3D: sqrt(x^2 + y^2 + z^2)
-      // Divided by 9.81 to convert meters/sec^2 to "G" units
-      float rawG = sqrt(sq(a.acceleration.x) + sq(a.acceleration.y) + sq(a.acceleration.z));
-      gForce = rawG / 9.81;
+        // -----------------------------
+        // 1️⃣ TOTAL G-FORCE (magnitude)
+        // -----------------------------
+        float ax = a.acceleration.x;
+        float ay = a.acceleration.y;
+        float az = a.acceleration.z;
 
-      // 2. CALCULATE SLOPE (Pitch / Y-Axis)
-      // Trigonometry: angle between forward axis (Y) and gravity (Z)
-      // * 57.29 converts Radians to Degrees
-      slope = atan2(a.acceleration.y, a.acceleration.z) * 57.29; 
+        float totalAcc = sqrt(ax*ax + ay*ay + az*az);
+        gForce = totalAcc / 9.81;
 
-      // 3. CALCULATE LEAN ANGLE (Roll / X-Axis)
-      // Same logic but using the sideways axis (X)
-      leanAngle = atan2(a.acceleration.x, a.acceleration.z) * 57.29;
+        // -----------------------------
+        // 2️⃣ NORMALIZE GRAVITY VECTOR
+        // -----------------------------
+        float norm = sqrt(ax*ax + ay*ay + az*az);
+        if (norm == 0) return;
 
-      // 4. CALCULATE VIBRATION (Road Quality)
-      // We check how much the vertical axis (Z) deviates from normal gravity (1G).
-      // Multiplied by 100 to make the number easier to read (e.g., 5, 10, 20)
-      float zG = abs(a.acceleration.z / 9.81);
-      vibration = abs(zG - 1.0) * 100; 
+        float gx = ax / norm;
+        float gy = ay / norm;
+        float gz = az / norm;
 
-      // 5. CRASH DETECTION LOGIC
-      // Simple threshold: if force is huge (> 3.5G), assume a crash
-      if (gForce > 3.5) crashDetected = true; 
-      else crashDetected = false;
+        // -----------------------------
+        // 3️⃣ SLOPE (PITCH) & LEAN (ROLL)
+        // -----------------------------
+        // Bicycle reference:
+        // X = left/right
+        // Y = forward/back
+        // Z = up/down
 
-      // Read internal temperature sensor
-      tempC = temp.temperature;
+        leanAngle = atan2(gx, gz) * 57.2958;   // Roll
+        slope     = atan2(gy, gz) * 57.2958;   // Pitch
+
+        // -----------------------------
+        // 4️⃣ REMOVE GRAVITY FROM XY
+        // -----------------------------
+        float linAx = ax - gx * 9.81;
+        float linAy = ay - gy * 9.81;
+
+        // -----------------------------
+        // 5️⃣ LATERAL G (TURN FORCE)
+        // -----------------------------
+        lateralG = sqrt(linAx*linAx + linAy*linAy) / 9.81;
+
+        // Kill noise when stopped
+        if (lateralG < 0.02) lateralG = 0.0;
+
+        // -----------------------------
+        // 6️⃣ VIBRATION (ROAD QUALITY)
+        // -----------------------------
+        float verticalG = abs(az / 9.81);
+        vibration = abs(verticalG - 1.0) * 100.0;
+
+        // -----------------------------
+        // 7️⃣ CRASH DETECTION
+        // -----------------------------
+        crashDetected = (gForce > 3.5);
+
+        // -----------------------------
+        // 8️⃣ TEMPERATURE
+        // -----------------------------
+        tempC = temp.temperature;
     }
 
-    // Getter functions 
-    float getGForce() { return gForce; }
-    float getSlope() { return slope; }
-    float getLean() { return leanAngle; }
-    float getVibration() { return vibration; }
-    bool isCrash() { return crashDetected; }
-    float getTemp() { return tempC; }
+    // -----------------------------
+    // GETTERS
+    // -----------------------------
+    float getGForce()     { return gForce; }
+    float getSlope()      { return slope; }
+    float getLean()       { return leanAngle; }
+    float getLateralG()   { return lateralG; }
+    float getVibration()  { return vibration; }
+    bool  isCrash()       { return crashDetected; }
+    float getTemp()       { return tempC; }
 };
+
 #endif
